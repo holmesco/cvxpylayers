@@ -4,6 +4,7 @@ import cvxpy as cp
 from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
 from cvxpy.reductions.solvers.utilities import extract_dual_value
 from cvxpy.constraints import PSD
+import diffcp.cones as cone_lib
 
 import numpy as np
 
@@ -125,9 +126,11 @@ class CvxpyLayer(torch.nn.Module):
             self.constr_map[constraint.id] = offs
             if isinstance(constraint, PSD):
                 dim = constraint.shape[0]
-                offs += dim * (dim + 1) / 2
+                offs += (dim * (dim + 1) / 2).astype(int)
             else:
                 offs += constraint.size
+        # store the full size of the constraint variable
+        self.constr_map[-1] = offs
 
         # Construct compiler
         self.dgp2dcp = None
@@ -214,6 +217,15 @@ def tri_to_full(lower_tri, n):
     return full
 
 
+def full_to_tri(full):
+    n = full.shape[0]
+    # scale upper off diagonal
+    full[np.triu_indices(n, k=1)] *= np.sqrt(2)
+    # get upper triangle
+    lower_tri = full[np.triu_indices(n)]
+    return lower_tri
+
+
 def split_dual(sltn, constraint, constr_map):
     """Extracts the dual value for constraint starting at offset.
 
@@ -225,10 +237,28 @@ def split_dual(sltn, constraint, constr_map):
         lower_tri_dim = dim * (dim + 1) // 2
         new_offset = offset + lower_tri_dim
         lower_tri = sltn[offset:new_offset]
-        value = tri_to_full(lower_tri, dim)
+        value = cone_lib.unvec_symm(lower_tri, dim)
     else:
         value, _ = extract_dual_value(sltn, offset, constraint)
     return value
+
+
+def split_dual_adjoint(constraints, del_vars, constr_map):
+    """Compute the adjoint of the dual splitting function
+
+    Args:
+        dvars (_type_): _description_
+        constraints (_type_): _description_
+    """
+    dy = np.zeros(constr_map[-1])
+    for c, dvar in zip(constraints, del_vars):
+        if isinstance(c, PSD):
+            dvar_vec = cone_lib.vec_symm(dvar).flatten(order="F")
+        else:
+            dvar_vec = dvar
+        size = c.size
+        dy[constr_map[c.id] : constr_map[c.id] + size] = dvar_vec
+    return dy
 
 
 def _CvxpyLayerFn(
@@ -393,24 +423,32 @@ def _CvxpyLayerFn(
 
         @staticmethod
         def backward(ctx, *dvars):
+            n_vars = len(variables)
+            # Split into primal and dual variables
+            dvars_p, dvars_d = dvars[:n_vars], dvars[n_vars:]
             if gp:
                 # derivative of exponential recovery transformation
-                dvars = [dvar * s for dvar, s in zip(dvars, ctx.sol)]
+                dvars_p = [dvars_p * s for dvars_p, s in zip(dvars_p, ctx.sol)]
 
-            dvars_numpy = [to_numpy(dvar) for dvar in dvars]
+            dvars_p_numpy = [to_numpy(dvar) for dvar in dvars_p]
+            dvars_d_numpy = [to_numpy(dvar) for dvar in dvars_d]
 
             if not ctx.batch:
-                dvars_numpy = [np.expand_dims(dvar, 0) for dvar in dvars_numpy]
+                dvars_p_numpy = [np.expand_dims(dvar, 0) for dvar in dvars_p_numpy]
+                dvars_d_numpy = [np.expand_dims(dvar, 0) for dvar in dvars_d_numpy]
 
             # differentiate from cvxpy variables to cone problem data
             dxs, dys, dss = [], [], []
             for i in range(ctx.batch_size):
+                # primal variables
                 del_vars = {}
-                for v, dv in zip(variables, [dv[i] for dv in dvars_numpy]):
+                for v, dv in zip(variables, [dv[i] for dv in dvars_p_numpy]):
                     del_vars[v.id] = dv
-                # TODO this needs to be fixed.
                 dxs.append(compiler.split_adjoint(del_vars))
-                dys.append(np.zeros(ctx.shapes[i][0]))
+                # dual variables
+                del_vars_d = [dd[i] for dd in dvars_d_numpy]
+                dys.append(split_dual_adjoint(constraints, del_vars_d, constr_map))
+                # zero the slack terms
                 dss.append(np.zeros(ctx.shapes[i][0]))
 
             dAs, dbs, dcs = ctx.DT_batch(dxs, dys, dss)
