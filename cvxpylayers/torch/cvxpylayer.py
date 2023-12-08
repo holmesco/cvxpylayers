@@ -208,24 +208,6 @@ def to_torch(x, dtype, device):
     return torch.from_numpy(x).type(dtype).to(device)
 
 
-def tri_to_full(lower_tri, n):
-    full = np.zeros((n, n))
-    full[np.triu_indices(n)] = lower_tri
-    full[np.tril_indices(n)] = lower_tri
-    full[np.tril_indices(n, k=-1)] /= np.sqrt(2)
-    full[np.triu_indices(n, k=1)] /= np.sqrt(2)
-    return full
-
-
-def full_to_tri(full):
-    n = full.shape[0]
-    # scale upper off diagonal
-    full[np.triu_indices(n, k=1)] *= np.sqrt(2)
-    # get upper triangle
-    lower_tri = full[np.triu_indices(n)]
-    return lower_tri
-
-
 def split_dual(sltn, constraint, constr_map):
     """Extracts the dual value for constraint starting at offset.
 
