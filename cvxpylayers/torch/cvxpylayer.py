@@ -119,18 +119,6 @@ class CvxpyLayer(torch.nn.Module):
         self.variables = variables
         self.var_dict = {v.id for v in self.variables}
         self.constraints = constraints
-        # get constraint mapping
-        self.constr_map = {}
-        offs = 0
-        for constraint in problem.constraints:
-            self.constr_map[constraint.id] = offs
-            if isinstance(constraint, PSD):
-                dim = constraint.shape[0]
-                offs += (dim * (dim + 1) / 2).astype(int)
-            else:
-                offs += constraint.size
-        # store the full size of the constraint variable
-        self.constr_map[-1] = offs
 
         # Construct compiler
         self.dgp2dcp = None
@@ -155,6 +143,19 @@ class CvxpyLayer(torch.nn.Module):
             self.compiler = data[cp.settings.PARAM_PROB]
             self.param_ids = [p.id for p in self.param_order]
         self.cone_dims = dims_to_solver_dict(data["dims"])
+
+        # Get map from constraints to dual variable indices
+        self.constr_map = {}
+        offs = 0
+        for constraint in self.compiler.constraints:
+            self.constr_map[constraint.id] = offs
+            if isinstance(constraint, PSD):
+                dim = constraint.shape[0]
+                offs += (dim * (dim + 1) / 2).astype(int)
+            else:
+                offs += constraint.size
+        # store the full size of dual variable at index -1
+        self.constr_map[-1] = offs
 
     def forward(self, *params, solver_args={}):
         """Solve problem (or a batch of problems) corresponding to `params`
