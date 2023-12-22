@@ -219,11 +219,11 @@ def split_dual(sltn, constraint, constr_map):
         dim = constraint.shape[0]
         lower_tri_dim = dim * (dim + 1) // 2
         new_offset = offset + lower_tri_dim
-        lower_tri = sltn[offset:new_offset]
-        value = cone_lib.unvec_symm(lower_tri, dim)
+        val_vec_symm = sltn[offset:new_offset]
+        value = cone_lib.unvec_symm(val_vec_symm, dim)
     else:
         value, _ = extract_dual_value(sltn, offset, constraint)
-    return value
+    return np.array(value)
 
 
 def split_dual_adjoint(constraints, del_vars, constr_map):
@@ -236,7 +236,10 @@ def split_dual_adjoint(constraints, del_vars, constr_map):
     dy = np.zeros(constr_map[-1])
     for c, dvar in zip(constraints, del_vars):
         if isinstance(c, PSD):
-            dvar_vec = cone_lib.vec_symm(dvar).flatten(order="F")
+            # Make sure that the variable is symmetric
+            dvar_s = (dvar + dvar.T) / 2
+            # convert to vector formulation
+            dvar_vec = cone_lib.vec_symm(dvar_s)
         else:
             dvar_vec = dvar
         size = c.size
