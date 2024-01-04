@@ -219,8 +219,8 @@ def split_dual(sltn, constraint, constr_map):
         dim = constraint.shape[0]
         lower_tri_dim = dim * (dim + 1) // 2
         new_offset = offset + lower_tri_dim
-        val_vec_symm = sltn[offset:new_offset]
-        value = cone_lib.unvec_symm(val_vec_symm, dim)
+        value_vec = sltn[offset:new_offset]
+        value = cone_lib.unvec_symm(value_vec, dim)
     else:
         value, _ = extract_dual_value(sltn, offset, constraint)
     return np.array(value)
