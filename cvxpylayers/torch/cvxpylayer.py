@@ -1,12 +1,12 @@
-import diffcp
 import time
+
 import cvxpy as cp
+import diffcp
+import diffcp.cones as cone_lib
+import numpy as np
+from cvxpy.constraints import PSD
 from cvxpy.reductions.solvers.conic_solvers.scs_conif import dims_to_solver_dict
 from cvxpy.reductions.solvers.utilities import extract_dual_value
-from cvxpy.constraints import PSD
-import diffcp.cones as cone_lib
-
-import numpy as np
 
 try:
     import torch
@@ -151,7 +151,7 @@ class CvxpyLayer(torch.nn.Module):
             self.constr_map[constraint.id] = offs
             if isinstance(constraint, PSD):
                 dim = constraint.shape[0]
-                offs += (dim * (dim + 1) / 2).astype(int)
+                offs += int(dim * (dim + 1) / 2)
             else:
                 offs += constraint.size
         # store the full size of dual variable at index -1
@@ -267,6 +267,8 @@ def _CvxpyLayerFn(
             # infer dtype, device, and whether or not params are batched
             ctx.dtype = params[0].dtype
             ctx.device = params[0].device
+            # Check if entire solution should be returned
+            ret_diffcp_soln = solver_args.pop("ret_diffcp_soln", False)
 
             ctx.batch_sizes = []
             for i, (p, q) in enumerate(zip(params, param_order)):
@@ -405,13 +407,18 @@ def _CvxpyLayerFn(
                 sol = [torch.exp(s) for s in sol]
                 ctx.sol = sol
 
-            return tuple(sol)
+            if ret_diffcp_soln:
+                # return full solution from diffcp
+                return tuple(sol + [xs, ys, ss])
+            else:
+                return tuple(sol)
 
         @staticmethod
         def backward(ctx, *dvars):
             n_vars = len(variables)
+            n_const = len(constraints)
             # Split into primal and dual variables
-            dvars_p, dvars_d = dvars[:n_vars], dvars[n_vars:]
+            dvars_p, dvars_d = dvars[:n_vars], dvars[n_vars : n_vars + n_const]
             if gp:
                 # derivative of exponential recovery transformation
                 dvars_p = [dvars_p * s for dvars_p, s in zip(dvars_p, ctx.sol)]
